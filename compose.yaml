@@ -1,0 +1,37 @@
+services:
+  phone-pc-transfer:
+    build: .
+    image: phone-pc-transfer:1.0.1
+    ports:
+      - "${PORT:-9100}:9100"
+    environment:
+      # PORT above is the host port; the container listener remains fixed at 9100.
+      PORT: "9100"
+      PUBLIC_URL: "${PUBLIC_URL:-}"
+      DATA_DIR: /data
+      TEXT_CHARS: "${TEXT_CHARS:-100000}"
+      FILE_BYTES: "${FILE_BYTES:-50000000}"
+      BATCH_COUNT: "${BATCH_COUNT:-20}"
+      SESSION_BYTES: "${SESSION_BYTES:-200000000}"
+      IDLE_MS: "${IDLE_MS:-1800000}"
+      PAIR_MS: "${PAIR_MS:-300000}"
+      RECEIVER_GRACE_MS: "${RECEIVER_GRACE_MS:-120000}"
+      # Sessions share 512 MiB tmpfs / 768 MiB RAM; 10 sessions cannot all fill their 200 MB quota.
+      MAX_SESSIONS: "${MAX_SESSIONS:-10}"
+    tmpfs:
+      # node:24-alpine's node user is uid/gid 1000; mount ownership is essential.
+      - /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    pids_limit: 100
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

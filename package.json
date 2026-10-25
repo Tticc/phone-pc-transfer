@@ -1,0 +1,11 @@
+{
+  "name": "phone-pc-transfer",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Offline LAN text and photo transfer for iPhone and Windows",
+  "type": "module",
+  "scripts": { "start": "node server.js", "test": "node --test" },
+  "engines": { "node": ">=22" },
+  "dependencies": { "busboy": "1.6.0", "qrcode": "1.5.4", "yazl": "3.3.1" }
+}

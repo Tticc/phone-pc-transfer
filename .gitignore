@@ -1,0 +1,10 @@
+node_modules/
+.env
+*.log
+artifacts/
+.env.*
+!.env.example
+*.tar
+*.tar.gz
+coverage/
+compose.wsl.yaml
