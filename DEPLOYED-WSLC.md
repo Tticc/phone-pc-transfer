@@ -4,19 +4,17 @@
 
 ## 命名调整
 
-项目目录、当前容器及建议 GitHub 仓库名均为 `phone-pc-transfer`；镜像为 `phone-pc-transfer:1.0.1`。已删除 WSLC 旧 `lan-drop` 容器及 `lan-drop:1.0.1`、`lan-drop:1.0.0`、`lan-drop:pre-lifecycle` 标签，并按新名称重新部署。启动命令改为 `wslc start phone-pc-transfer`。重建已清空临时内容，需重新配对。页面中的 LAN Drop 品牌及内部存储键本次未做全量改名；后续已按用户要求删除 Ubuntu-24.04 Docker Engine 中的旧容器 `lan-drop-lan-drop-1` 及镜像 `lan-drop:1.0.0`；本地旧镜像归档未删除。
+项目目录、当前容器及建议 GitHub 仓库名均为 `phone-pc-transfer`；镜像已迭代为 `phone-pc-transfer:1.1.0`（支持电脑/手机双向互传）。已删除 WSLC 旧 `lan-drop` 容器及旧标签，并按新名称重新部署。启动命令为 `wslc start phone-pc-transfer`。重建已清空临时内容，需重新配对。页面品牌已统一为 Phone PC Transfer，存储键平滑兼容旧会话。
 
 ## 当前状态
 
-- 容器名：`phone-pc-transfer`；当前镜像：`phone-pc-transfer:1.0.1`（会话生命周期修复版）。
+- 容器名：`phone-pc-transfer`；当前镜像：`phone-pc-transfer:1.1.0`（电脑 ⇄ 手机双向互传版）。
 - 发布端口：`0.0.0.0:9100 -> 9100/tcp`，Windows 监听进程由 WSLC 管理。
 - 电脑入口：<http://localhost:9100>。
 - 手机配对地址：`http://192.168.1.3:9100`。
 - 未新增 portproxy，实际检查转发列表为空；无需绑定 Ubuntu IP。
-- Ubuntu Docker Engine 旧容器 `lan-drop-lan-drop-1` 和镜像 `lan-drop:1.0.0` 已删除，不再保留该引擎内回退部署；其他 Docker 容器未改动。
-- 未新增或恢复防火墙规则；2026-10-25 用户已确认手机成功配对，当前局域网入站路径已实测打通。
-- 已实施会话生命周期优化：显式结束、空会话失联宽限 120 秒、429 手动重试与安全清理；会话上限已按用户要求从 2 调整为 10；共享 tmpfs 512 MiB、容器内存 768 MiB 不变，不能保证 10 个会话同时存满各自配额。
-- WSLC 旧 `lan-drop` 镜像及回滚标签已按用户要求清理，不再提供该本地标签回滚。
+- 支持功能：手机与电脑双向发送文字（支持链接识别与快捷键）、图片上传与预览、单文件与批量 ZIP 下载、显式结束会话。
+- 会话生命周期与配额：单会话上限 10、空会话 120 秒失联宽限、内存 tmpfs 512 MiB、容器内存 768 MiB。
 
 ## 验证结果
 
@@ -50,7 +48,7 @@ Start-Process 'http://localhost:9100'
 ```powershell
 wslc stop phone-pc-transfer
 wslc rm phone-pc-transfer
-wslc run -d --name phone-pc-transfer -p 0.0.0.0:9100:9100 -e PORT=9100 -e PUBLIC_URL=http://192.168.1.3:9100 -e DATA_DIR=/data -e MAX_SESSIONS=10 -e RECEIVER_GRACE_MS=120000 --tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev --tmpfs /tmp:size=16m,mode=1777,noexec,nosuid,nodev -m 768m phone-pc-transfer:1.0.1
+wslc run -d --name phone-pc-transfer -p 0.0.0.0:9100:9100 -e PORT=9100 -e PUBLIC_URL=http://192.168.1.3:9100 -e DATA_DIR=/data -e MAX_SESSIONS=10 -e RECEIVER_GRACE_MS=120000 --tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev --tmpfs /tmp:size=16m,mode=1777,noexec,nosuid,nodev -m 768m phone-pc-transfer:1.1.0
 ```
 
 ## 与原 Docker 部署的差异

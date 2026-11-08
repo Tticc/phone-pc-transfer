@@ -59,9 +59,36 @@ export async function createApp(options = {}) {
     if (error) throw error;
   }
   const timer = setInterval(() => { cleanup().catch(() => console.error('Temporary content cleanup failed')); }, Math.min(idleMs, receiverGraceMs, 30000)); timer.unref();
-  function auth(req, role) { const t = (req.headers.authorization || '').replace(/^Bearer /, ''); const s = (role === 'receiver' ? receivers : senders).get(t); if (!s || (!s.busy && now() - s.lastActivity >= idleMs)) throw fail(401, '连接已失效，请在电脑重新配对'); return s; }
+  function auth(req, role) {
+    const t = (req.headers.authorization || '').replace(/^Bearer /, '');
+    if (!t) throw fail(401, '连接已失效，请在电脑重新配对');
+    if (role === 'receiver') {
+      const s = receivers.get(t);
+      if (!s || (!s.busy && now() - s.lastActivity >= idleMs)) throw fail(401, '连接已失效，请在电脑重新配对');
+      return s;
+    }
+    if (role === 'sender') {
+      const s = senders.get(t);
+      if (!s || (!s.busy && now() - s.lastActivity >= idleMs)) throw fail(401, '连接已失效，请在电脑重新配对');
+      return s;
+    }
+    if (role === 'any') {
+      const receiverSession = receivers.get(t);
+      if (receiverSession) {
+        if (!receiverSession.busy && now() - receiverSession.lastActivity >= idleMs) throw fail(401, '连接已失效，请在电脑重新配对');
+        return { session: receiverSession, role: 'receiver' };
+      }
+      const senderSession = senders.get(t);
+      if (senderSession) {
+        if (!senderSession.busy && now() - senderSession.lastActivity >= idleMs) throw fail(401, '连接已失效，请在电脑重新配对');
+        return { session: senderSession, role: 'sender' };
+      }
+      throw fail(401, '连接已失效，请在电脑重新配对');
+    }
+    throw fail(500, '未知角色');
+  }
   function send(res, value, status = 200) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); }
-  async function upload(req, s) {
+  async function upload(req, s, role) {
     if (s.busy) throw fail(409, '正在处理其他操作，请稍后重试');
     s.busy++; touch(s); const epoch = s.epoch; const staged = []; const jobs = []; let error; let bytes = 0;
     const mark = e => { error ||= e; };
@@ -70,7 +97,7 @@ export async function createApp(options = {}) {
       parser.on('file', (field, stream, info) => {
         const id = randomUUID(); const disk = path.join(s.dir, id); const name = path.basename(info.filename.replaceAll('\\', '/')).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180) || 'photo';
         const mime = info.mimeType.toLowerCase();
-        const item = { id, type: 'image', name, mime, size: 0, createdAt: new Date().toISOString(), disk };
+        const item = { id, type: 'image', sender: role === 'receiver' ? 'pc' : 'phone', name, mime, size: 0, createdAt: new Date().toISOString(), disk };
         staged.push(item);
         if (field !== 'files' || !mime.startsWith('image/')) { mark(fail(415, '请选择图片文件')); stream.resume(); return; }
         stream.on('limit', () => mark(fail(413, '单张图片超过大小限制')));
@@ -90,7 +117,7 @@ export async function createApp(options = {}) {
       await Promise.all(jobs);
       if (error) throw error;
       if (!staged.length) throw fail(400, '请选择至少一张图片');
-      if (s.epoch !== epoch || !s.sender) throw fail(409, '配对已更改，请重新发送');
+      if (s.epoch !== epoch || (role === 'sender' && !s.sender)) throw fail(409, '配对已更改，请重新发送');
       s.items.push(...staged); s.usedBytes += bytes; touch(s);
       return { items: staged.map(({ disk, ...item }) => item) };
     } catch (e) { await Promise.all(jobs); await Promise.all(staged.map(i => rm(i.disk, { force: true }))); throw e; }
@@ -141,50 +168,56 @@ export async function createApp(options = {}) {
       if (route === '/api/sender' && method === 'GET') { auth(req, 'sender'); return send(res, { connected: true }); }
       if (route === '/api/sender/disconnect' && method === 'POST') { const s = auth(req, 'sender'); revoke(s); s.epoch++; touch(s); return send(res, { ok: true }); }
       if (route === '/api/text' && method === 'POST') {
-        const s = auth(req, 'sender'); const epoch = s.epoch; const { text } = await jsonBody(req, limits.textChars * 4 + 1024);
-        auth(req, 'sender');
-        if (s.epoch !== epoch || !s.sender) throw fail(409, '配对已更改');
+        const { session: s, role } = auth(req, 'any'); const epoch = s.epoch; const { text } = await jsonBody(req, limits.textChars * 4 + 1024);
+        const recheck = auth(req, 'any');
+        if (recheck.session !== s || recheck.role !== role) throw fail(401, '连接已失效');
+        if (s.epoch !== epoch || (role === 'sender' && !s.sender)) throw fail(409, '配对已更改');
         if (s.busy) throw fail(409, '传输或下载中，请稍后发送');
         if (typeof text !== 'string' || !text.trim()) throw fail(400, '请输入文字');
         if ([...text].length > limits.textChars) throw fail(413, '文字超过字符限制');
         const size = Buffer.byteLength(text); if (s.usedBytes + size > limits.sessionBytes) throw fail(413, '会话暂存空间已满');
         // Bound metadata even for very small messages.
         if (s.items.length >= 2000) throw fail(413, '内容条目过多，请清空后继续');
-        const item = { id: randomUUID(), type: 'text', text, size, createdAt: new Date().toISOString() };
+        const item = { id: randomUUID(), type: 'text', sender: role === 'receiver' ? 'pc' : 'phone', text, size, createdAt: new Date().toISOString() };
         s.items.push(item); s.usedBytes += size; touch(s); return send(res, { item }, 201);
       }
-      if (route === '/api/images' && method === 'POST') { const s = auth(req, 'sender'); if (s.items.length + limits.batchCount > 2000) throw fail(413, '内容条目过多，请清空后继续'); return send(res, await upload(req, s), 201); }
-      if (route.startsWith('/api/')) {
-        const s = auth(req, 'receiver');
-        if (route === '/api/session' && method === 'GET') { s.receiverSeen = now(); return send(res, { paired: !!s.sender, pairUrl: s.code && now() <= s.pairUntil ? `${s.publicUrl}/send#${s.code}` : null, items: wireItems(s), usedBytes: s.usedBytes, expiresAt: s.lastActivity + idleMs }); }
-        if (route === '/api/session' && method === 'DELETE') {
-          if (s.busy) throw fail(409, '传输、下载或清理中，请完成后再结束会话');
-          await remove(s); return send(res, { ok: true });
-        }
-        if (route === '/api/disconnect' && method === 'POST') { revoke(s); s.epoch++; touch(s); return send(res, { ok: true }); }
-        if (route === '/api/repair' && method === 'POST') { revoke(s); s.epoch++; touch(s); return send(res, { pairUrl: pair(s) }); }
-        if (route === '/api/items' && method === 'DELETE') {
-          if (s.busy) throw fail(409, '传输或下载中，请稍后清空');
-          s.busy++; s.clearing = true; s.epoch++;
-          try { await Promise.all(s.items.filter(i => i.disk).map(i => rm(i.disk, { force: true }))); s.items = []; s.usedBytes = 0; touch(s); return send(res, { ok: true }); }
-          finally { s.busy--; s.clearing = false; }
-        }
-        if (route.startsWith('/api/files/') && method === 'GET') {
-          if (s.clearing) throw fail(409, '正在清空，请稍后重试');
-          const item = s.items.find(i => i.id === route.slice(11) && i.disk); if (!item) throw fail(404, '文件不存在或已清理');
-          s.busy++; touch(s);
-          try { const file = await stat(item.disk); res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': file.size, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}` }); await pipeline(createReadStream(item.disk), res); }
-          finally { s.busy--; touch(s); } return;
-        }
-        if (route === '/api/archive' && method === 'GET') {
-          if (s.clearing) throw fail(409, '正在清空，请稍后重试');
-          const files = s.items.filter(i => i.disk); if (!files.length) throw fail(404, '没有可下载图片');
-          const zip = new yazl.ZipFile(); files.forEach((i, n) => zip.addFile(i.disk, `${n + 1}-${i.name}`, { compress: false }));
-          s.busy++; touch(s); res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="lan-drop.zip"' });
-          try { zip.on('error', e => zip.outputStream.destroy(e)); zip.end(); await pipeline(zip.outputStream, res); } finally { s.busy--; touch(s); } return;
-        }
-        throw fail(404, '接口不存在');
+      if (route === '/api/images' && method === 'POST') { const { session: s, role } = auth(req, 'any'); if (s.items.length + limits.batchCount > 2000) throw fail(413, '内容条目过多，请清空后继续'); return send(res, await upload(req, s, role), 201); }
+      if (route === '/api/session' && method === 'GET') {
+        const { session: s, role } = auth(req, 'any');
+        if (role === 'receiver') s.receiverSeen = now();
+        return send(res, { role, paired: !!s.sender, pairUrl: role === 'receiver' && s.code && now() <= s.pairUntil ? `${s.publicUrl}/send#${s.code}` : null, items: wireItems(s), usedBytes: s.usedBytes, expiresAt: s.lastActivity + idleMs });
       }
+      if (route === '/api/session' && method === 'DELETE') {
+        const s = auth(req, 'receiver');
+        if (s.busy) throw fail(409, '传输、下载或清理中，请完成后再结束会话');
+        await remove(s); return send(res, { ok: true });
+      }
+      if (route === '/api/disconnect' && method === 'POST') { const s = auth(req, 'receiver'); revoke(s); s.epoch++; touch(s); return send(res, { ok: true }); }
+      if (route === '/api/repair' && method === 'POST') { const s = auth(req, 'receiver'); revoke(s); s.epoch++; touch(s); return send(res, { pairUrl: pair(s) }); }
+      if (route === '/api/items' && method === 'DELETE') {
+        const s = auth(req, 'receiver');
+        if (s.busy) throw fail(409, '传输或下载中，请稍后清空');
+        s.busy++; s.clearing = true; s.epoch++;
+        try { await Promise.all(s.items.filter(i => i.disk).map(i => rm(i.disk, { force: true }))); s.items = []; s.usedBytes = 0; touch(s); return send(res, { ok: true }); }
+        finally { s.busy--; s.clearing = false; }
+      }
+      if (route.startsWith('/api/files/') && method === 'GET') {
+        const { session: s } = auth(req, 'any');
+        if (s.clearing) throw fail(409, '正在清空，请稍后重试');
+        const item = s.items.find(i => i.id === route.slice(11) && i.disk); if (!item) throw fail(404, '文件不存在或已清理');
+        s.busy++; touch(s);
+        try { const file = await stat(item.disk); res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': file.size, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}` }); await pipeline(createReadStream(item.disk), res); }
+        finally { s.busy--; touch(s); } return;
+      }
+      if (route === '/api/archive' && method === 'GET') {
+        const { session: s } = auth(req, 'any');
+        if (s.clearing) throw fail(409, '正在清空，请稍后重试');
+        const files = s.items.filter(i => i.disk); if (!files.length) throw fail(404, '没有可下载图片');
+        const zip = new yazl.ZipFile(); files.forEach((i, n) => zip.addFile(i.disk, `${n + 1}-${i.name}`, { compress: false }));
+        s.busy++; touch(s); res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="lan-drop.zip"' });
+        try { zip.on('error', e => zip.outputStream.destroy(e)); zip.end(); await pipeline(zip.outputStream, res); } finally { s.busy--; touch(s); } return;
+      }
+      if (route.startsWith('/api/')) throw fail(404, '接口不存在');
       const pages = { '/': ['index.html', 'text/html'], '/send': ['send.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/receiver.js': ['receiver.js', 'text/javascript'], '/sender.js': ['sender.js', 'text/javascript'] };
       if (method !== 'GET' || !pages[route]) throw fail(404, '页面不存在');
       const [name, mime] = pages[route]; const content = await readFile(path.join(root, 'public', name)); res.writeHead(200, { 'Content-Type': `${mime}; charset=utf-8` }); res.end(content);

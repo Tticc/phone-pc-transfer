@@ -4,7 +4,7 @@
   let token = '', config = null, pairUrl = '', expired = false, polling = false, generation = 0, pollGeneration = 0, hasImages = false, wasPaired = false;
   const cards = new Map();
   const blobs = new Map();
-  let toastTimer, initializing = true, creating = false, ending = false, retryAt = 0, retryTimer, retryPublicUrl = '';
+  let toastTimer, initializing = true, creating = false, ending = false, retryAt = 0, retryTimer, retryPublicUrl = '', pcSendingText = false, pcUploading = false;
   const archiveUrls = new Set();
   function updateCreateControls() {
     const seconds = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
@@ -13,6 +13,16 @@
     $('retry-create').disabled = creating || ending || seconds > 0;
     $('retry-create').textContent = seconds ? `${seconds} 秒后可手动重试` : '重试创建会话';
     if (!seconds) { clearInterval(retryTimer); retryTimer = null; }
+  }
+  function updatePcControls() {
+    const ready = Boolean(token) && !expired && !ending;
+    $('pc-text-input').disabled = !ready || pcSendingText;
+    $('pc-image-files').disabled = !ready || pcUploading;
+    $('pc-file-label').classList.toggle('disabled', !ready || pcUploading);
+    const text = $('pc-text-input').value;
+    const chars = [...text].length;
+    $('pc-text-count').textContent = `${chars.toLocaleString()}${config && config.limits ? ` / ${config.limits.textChars.toLocaleString()}` : ''} 字符`;
+    $('pc-send-text').disabled = !ready || pcSendingText || !text.trim() || (config && config.limits && chars > config.limits.textChars);
   }
   function sessionControls() {
     show($('end-session'), Boolean(token) && !expired);
@@ -23,10 +33,25 @@
     $('download-all').disabled = ending || expired || !hasImages;
     $('clear-items').disabled = ending || expired || !cards.size;
     for (const control of $('items').querySelectorAll('button')) control.disabled = ending || expired;
+    updatePcControls();
   }
-  const sessionKey = 'lan-drop-receiver';
-  function rememberSession(value) { try { if (value) sessionStorage.setItem(sessionKey, value); else sessionStorage.removeItem(sessionKey); } catch {} }
-  function savedSession() { try { return sessionStorage.getItem(sessionKey) || ''; } catch { return ''; } }
+  const sessionKey = 'phone-pc-transfer-receiver';
+  const legacySessionKey = 'lan-drop-receiver';
+  function rememberSession(value) {
+    try {
+      if (value) {
+        sessionStorage.setItem(sessionKey, value);
+      } else {
+        sessionStorage.removeItem(sessionKey);
+        sessionStorage.removeItem(legacySessionKey);
+      }
+    } catch {}
+  }
+  function savedSession() {
+    try {
+      return sessionStorage.getItem(sessionKey) || sessionStorage.getItem(legacySessionKey) || '';
+    } catch { return ''; }
+  }
   function show(el, visible) { el.classList.toggle('hidden', !visible); }
   function notice(id, message, error = false) { const el = $(id); el.textContent = message; el.classList.toggle('error', error); show(el, Boolean(message)); }
   function toast(message) { $('toast').textContent = message; show($('toast'), true); clearTimeout(toastTimer); toastTimer = setTimeout(() => show($('toast'), false), 3500); }
@@ -150,9 +175,13 @@
     const card = document.createElement('article'); card.className = 'item';
     const body = document.createElement('div'); body.className = 'item-body';
     const meta = document.createElement('div'); meta.className = 'item-meta';
+    const tag = document.createElement('span');
+    const isPc = item.sender === 'pc';
+    tag.className = `sender-tag ${isPc ? 'tag-pc' : 'tag-phone'}`;
+    tag.textContent = isPc ? '电脑发送' : '手机发送';
     const kind = document.createElement('span'); kind.className = 'item-kind'; kind.textContent = item.type === 'text' ? '文字 / 链接' : '图片';
     const time = document.createElement('time'); const date = new Date(item.createdAt); time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    meta.append(kind, time); body.append(meta); card.append(body);
+    meta.append(tag, kind, time); body.append(meta); card.append(body);
     const footer = document.createElement('div'); footer.className = 'item-footer';
     const name = document.createElement('span'); name.className = 'item-name';
     const actions = document.createElement('div'); actions.className = 'item-actions';
@@ -193,7 +222,7 @@
     show($('empty-state'), items.length === 0); $('download-all').disabled = !hasImages; $('clear-items').disabled = !items.length;
     if (wasPaired && !data.paired) { pairUrl = ''; $('pair-link').value = ''; }
     wasPaired = Boolean(data.paired);
-    state(data.paired ? '手机已连接 · 可以开始发送' : pairUrl ? '等待手机扫码连接' : '手机已断开，请重新配对', data.paired ? 'connected' : '');
+    state(data.paired ? '手机已连接 · 可以开始互传' : pairUrl ? '等待手机扫码连接' : '手机已断开，请重新配对', data.paired ? 'connected' : '');
     show($('disconnect-button'), Boolean(data.paired));
     show($('pair-panel'), !data.paired && Boolean(pairUrl)); show($('paired-panel'), Boolean(data.paired));
   }
@@ -204,6 +233,80 @@
     catch (error) { if (current !== generation || epoch !== pollGeneration || ending) return; if (error.status === 401 || error.status === 410) expire(error); else notice('inbox-notice', '连接暂时中断，正在重试。已接收内容仍保留在这里。', true); }
     finally { polling = false; }
   }
+  function pcUpload(files) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest(); xhr.open('POST', '/api/images'); xhr.timeout = 120000; xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = event => {
+        if (event.lengthComputable) {
+          const percent = Math.min(100, Math.round(event.loaded / event.total * 100));
+          $('pc-progress-bar').style.width = `${percent}%`;
+          $('pc-progress-label').textContent = percent === 100 ? '上传完成，正在处理…' : `正在发送 ${percent}% · ${bytes(event.loaded)} / ${bytes(event.total)}`;
+        } else $('pc-progress-label').textContent = `正在发送 · 已发送 ${bytes(event.loaded)}`;
+      };
+      xhr.onload = () => {
+        let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) {
+          if (!Array.isArray(data.items)) return reject(new Error('服务器响应不完整，发送结果尚未确认。'));
+          resolve(data);
+        } else {
+          const error = new Error(data.error || `上传失败（${xhr.status}）。`);
+          error.status = xhr.status; reject(error);
+        }
+      };
+      xhr.onerror = () => reject(new Error('上传连接中断，请重试。'));
+      xhr.ontimeout = () => reject(new Error('上传超时，请重试。'));
+      const body = new FormData();
+      files.forEach(file => {
+        const data = file.type.startsWith('image/') ? file : new Blob([file], { type: /\.heif$/i.test(file.name) ? 'image/heif' : 'image/heic' });
+        body.append('files', data, file.name);
+      });
+      xhr.send(body);
+    });
+  }
+  $('pc-text-input').addEventListener('input', updatePcControls);
+  $('pc-text-input').addEventListener('keydown', event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      if (!$('pc-send-text').disabled) $('pc-text-form').requestSubmit();
+    }
+  });
+  $('pc-text-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!token || expired || ending || pcSendingText) return;
+    const text = $('pc-text-input').value;
+    if (!text.trim()) return;
+    pcSendingText = true; updatePcControls(); notice('pc-send-message', ''); $('pc-send-text').textContent = '正在发送…';
+    try {
+      await api('/api/text', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, 20000);
+      $('pc-text-input').value = ''; updatePcControls(); toast('文字已发送给手机'); await poll();
+    } catch (error) { handleError(error, 'pc-send-message'); }
+    finally { pcSendingText = false; $('pc-send-text').textContent = '发送文字 ↗'; updatePcControls(); }
+  });
+  $('pc-image-files').addEventListener('change', async () => {
+    if (!token || expired || ending || pcUploading) return;
+    const files = Array.from($('pc-image-files').files);
+    $('pc-image-files').value = '';
+    if (!files.length) return;
+    notice('pc-send-message', '');
+    if (config && config.limits) {
+      if (files.length > config.limits.batchCount) { notice('pc-send-message', `一次最多选择 ${config.limits.batchCount} 张图片。`, true); return; }
+      for (const file of files) {
+        if (!file.type.startsWith('image/') && !/\.(heic|heif)$/i.test(file.name)) { notice('pc-send-message', `“${file.name}”不是支持的图片文件。`, true); return; }
+        if (file.size > config.limits.fileBytes) { notice('pc-send-message', `“${file.name}”超过单张 ${bytes(config.limits.fileBytes)} 的限制。`, true); return; }
+        if (!file.size) { notice('pc-send-message', `“${file.name}”为空文件。`, true); return; }
+      }
+    }
+    pcUploading = true; updatePcControls(); show($('pc-upload-progress'), true);
+    $('pc-progress-bar').style.width = '0%'; $('pc-progress-label').textContent = '准备上传…';
+    try {
+      const data = await pcUpload(files);
+      toast(`${data.items.length} 张图片已发送给手机`);
+      $('pc-progress-bar').style.width = '100%'; $('pc-progress-label').textContent = '上传完成';
+      setTimeout(() => show($('pc-upload-progress'), false), 1500);
+      await poll();
+    } catch (error) { show($('pc-upload-progress'), false); handleError(error, 'pc-send-message'); }
+    finally { pcUploading = false; updatePcControls(); }
+  });
   $('setup-form').addEventListener('submit', event => { event.preventDefault(); try { create(validateUrl($('public-url').value.trim())); } catch (error) { notice('connection-error', error.message, true); } });
   $('new-session').addEventListener('click', () => { if (creating || ending || token) return; expired = false; generation++; show($('new-session'), false); show($('setup-form'), true); state('填写地址后重新创建会话'); });
   $('end-session').addEventListener('click', endSession);
@@ -241,7 +344,7 @@
     try {
       const response = await api('/api/archive', {}, 120000); const blob = await response.blob();
       if (current !== generation || ending) return;
-      const url = URL.createObjectURL(blob); archiveUrls.add(url); download(url, `LAN-Drop-${new Date().toISOString().slice(0, 10)}.zip`);
+      const url = URL.createObjectURL(blob); archiveUrls.add(url); download(url, `Phone-PC-Transfer-${new Date().toISOString().slice(0, 10)}.zip`);
       setTimeout(() => { if (archiveUrls.delete(url)) URL.revokeObjectURL(url); }, 60000); toast('已开始下载 ZIP，请确认浏览器保存位置。');
     } catch (error) { if (current === generation && !ending) handleError(error); } finally { if (current === generation) $('download-all').disabled = ending || expired || !hasImages; }
   });

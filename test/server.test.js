@@ -270,16 +270,81 @@ test('authentication isolates sessions and receiver/sender roles', async t => {
   const phone = await f.pair(a);
   const response = await f.upload(phone.senderToken);
   const { items: [item] } = await response.json();
-  for (const token of [undefined, 'wrong', phone.senderToken]) {
+  for (const token of [undefined, 'wrong']) {
     await expectError(await f.request('/api/session', { token }), 401);
     await expectError(await f.request(`/api/files/${item.id}`, { token }), 401);
-  }
-  for (const token of [undefined, 'wrong', a.receiverToken]) {
     await expectError(await f.request('/api/text', { method: 'POST', token, json: { text: 'unauthorized' } }), 401);
   }
+  // Phone sender can read its own session and download files
+  const senderSession = await f.json('/api/session', { token: phone.senderToken });
+  assert.equal(senderSession.items.length, 1);
+  assert.equal(senderSession.role, 'sender');
+  const file = await f.request(`/api/files/${item.id}`, { token: phone.senderToken });
+  assert.equal(file.status, 200);
+
+  // Phone sender cannot perform receiver-only management actions
+  await expectError(await f.request('/api/session', { method: 'DELETE', token: phone.senderToken }), 401);
+  await expectError(await f.request('/api/items', { method: 'DELETE', token: phone.senderToken }), 401);
+  await expectError(await f.request('/api/repair', { method: 'POST', token: phone.senderToken }), 401);
+
+  // PC receiver can also send text and files
+  const pcText = await f.json('/api/text', { method: 'POST', token: a.receiverToken, json: { text: 'from pc' } }, 201);
+  assert.equal(pcText.item.sender, 'pc');
+
+  // Other session's token cannot access session A's items
   await expectError(await f.request(`/api/files/${item.id}`, { token: b.receiverToken }), 404);
   await expectError(await f.request('/api/archive', { token: b.receiverToken }), 404);
   assert.deepEqual((await f.state(b)).items, []);
+});
+
+test('bidirectional transfer allows pc and phone to exchange text and photos', async t => {
+  const f = await fixture(t);
+  const s = await f.session();
+  const phone = await f.pair(s);
+
+  // 1. PC sends text
+  const pcText = await f.json('/api/text', { method: 'POST', token: s.receiverToken, json: { text: '你好，手机！' } }, 201);
+  assert.equal(pcText.item.sender, 'pc');
+  assert.equal(pcText.item.text, '你好，手机！');
+
+  // 2. PC uploads photo
+  const pcUpload = await f.upload(s.receiverToken, [{ bytes: IMAGE, name: 'pc-photo.png' }]);
+  assert.equal(pcUpload.status, 201);
+  const { items: [pcImg] } = await pcUpload.json();
+  assert.equal(pcImg.sender, 'pc');
+
+  // 3. Phone sends text
+  const phoneText = await f.json('/api/text', { method: 'POST', token: phone.senderToken, json: { text: '收到，电脑！' } }, 201);
+  assert.equal(phoneText.item.sender, 'phone');
+
+  // 4. Phone uploads photo
+  const phoneUpload = await f.upload(phone.senderToken, [{ bytes: IMAGE, name: 'phone-photo.png' }]);
+  assert.equal(phoneUpload.status, 201);
+  const { items: [phoneImg] } = await phoneUpload.json();
+  assert.equal(phoneImg.sender, 'phone');
+
+  // 5. Phone queries /api/session and sees all 4 items with correct origin tags
+  const phoneState = await f.json('/api/session', { token: phone.senderToken });
+  assert.equal(phoneState.items.length, 4);
+  assert.deepEqual(phoneState.items.map(i => i.sender), ['pc', 'pc', 'phone', 'phone']);
+
+  // 6. Phone can download the image sent by PC
+  const downloadByPhone = await f.request(`/api/files/${pcImg.id}`, { token: phone.senderToken });
+  assert.equal(downloadByPhone.status, 200);
+  assert.deepEqual(Buffer.from(await downloadByPhone.arrayBuffer()), IMAGE);
+
+  // 7. PC can download the image sent by Phone
+  const downloadByPC = await f.request(`/api/files/${phoneImg.id}`, { token: s.receiverToken });
+  assert.equal(downloadByPC.status, 200);
+  assert.deepEqual(Buffer.from(await downloadByPC.arrayBuffer()), IMAGE);
+
+  // 8. PC can stage items before phone pairs, and phone sees them immediately after pairing
+  const s2 = await f.session();
+  await f.json('/api/text', { method: 'POST', token: s2.receiverToken, json: { text: '提前准备好的内容' } }, 201);
+  const phone2 = await f.pair(s2);
+  const state2 = await f.json('/api/session', { token: phone2.senderToken });
+  assert.equal(state2.items.length, 1);
+  assert.equal(state2.items[0].text, '提前准备好的内容');
 });
 
 test('cross-origin mutations denied, same-origin works, responses have defensive headers', async t => {

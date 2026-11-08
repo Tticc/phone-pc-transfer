@@ -4,29 +4,29 @@
 
 ## 一句话现状
 
-项目已开发完成、真机验收通过、推送到 GitHub，并正以 Windows 原生 WSLC 容器形式在本机 `9100` 端口稳定运行（健康检查通过）。当前没有进行中的开发任务，只有若干已知遗留项。
+项目已完成**电脑与手机双向互传迭代（v1.1.0）**，自动化测试 45 项全部通过，部署冒烟验收通过，正以 Windows 原生 WSLC 容器形式在本机 `9100` 端口稳定运行（健康检查通过）。
 
 ## 仓库与目录
 
-- 代码目录：`C:/Users/18883/IdeaProjects/test/phone-pc-transfer`（由 `lan-drop` 改名而来）
-- 远程仓库：<https://github.com/Tticc/phone-pc-transfer>，分支 `main`，首个提交 `f0a442e`
+- 代码目录：`C:/Users/18883/IdeaProjects/test/phone-pc-transfer`
+- 远程仓库：<https://github.com/Tticc/phone-pc-transfer>，分支 `main`
 - 许可证：MIT（`LICENSE`，`package.json` 已声明）
 - 未纳入版本库：`node_modules/`、`artifacts/`、`lan-drop-wslc-image.tar`、`compose.wsl.yaml`（本机私有）、`.env*`（除 `.env.example`）
 
 ## 技术栈与文件职责
 
-- `server.js`：唯一后端，Node.js ≥22 原生 `http`，无框架。API：`/health`、`/api/config`、`/api/sessions`、`/api/pair`、`/api/session`、`/api/text`、`/api/images`、`/api/files/:id`、`/api/archive`、`/api/items`、`/api/disconnect`、`/api/sender/disconnect`
-- `public/index.html` + `public/receiver.js`：手机接收页（二维码配对、轮询、文字安全展示、图片预览／下载、ZIP、清空、结束会话）
-- `public/send.html` + `public/sender.js`：电脑发送页（fragment 凭证、文字、图片上传进度与重试、断开手机）
-- `public/style.css`：响应式样式，无外部资源（离线可用）
-- `test/server.test.js`：唯一测试文件，44 项
+- `server.js`：唯一后端，Node.js ≥22 原生 `http`，无框架。支持电脑 ⇄ 手机双向鉴权发送与接收。API：`/health`、`/api/config`、`/api/sessions`、`/api/pair`、`/api/session`、`/api/text`、`/api/images`、`/api/files/:id`、`/api/archive`、`/api/items`、`/api/disconnect`、`/api/sender/disconnect`
+- `public/index.html` + `public/receiver.js`：电脑传输页（二维码配对、发送文字/图片给手机、接收与轮询手机内容、图片预览与下载、ZIP、清空、结束会话）
+- `public/send.html` + `public/sender.js`：手机传输页（扫码凭证、发送文字/图片、实时同步接收电脑发来的内容与一键复制、图片预览与下载）
+- `public/style.css`：响应式样式，含设备来源标记（电脑发送/手机发送），离线可用
+- `test/server.test.js`：唯一测试文件，45 项全部通过
 - `Dockerfile`、`compose.yaml`、`.dockerignore`、`compose.wsl.yaml`（本机）
-- 文档：`README.md`（概览）、`docs/DEPLOYMENT.md`（通用部署与环境变量）、`DEPLOY.md`、`DEPLOYED-WSLC.md`（**当前部署事实来源**）、`DEPLOYED-WSL.md`（历史）、`TESTING.md`（测试与验收记录）、`TODO.md`（待办与操作建议）
-- `deploy-smoke.mjs`：对运行中实例做端到端冒烟（配对→文字→图片→下载→ZIP→清空→断开）
+- 文档：`README.md`（概览）、`docs/DEPLOYMENT.md`、`DEPLOY.md`、`DEPLOYED-WSLC.md`（**当前部署事实来源**）、`TESTING.md`、`TODO.md`
+- `deploy-smoke.mjs`：对运行中实例做端到端双向冒烟（配对→手机发图文→电脑下载→电脑发图文→手机接收下载→ZIP→清空→安全结束）
 
 ## 运行中的部署（WSLC）
 
-- 容器 `phone-pc-transfer`，镜像 `phone-pc-transfer:1.0.1`，状态 healthy，端口 `0.0.0.0:9100 -> 9100/tcp`
+- 容器 `phone-pc-transfer`，镜像 `phone-pc-transfer:1.1.0`，状态 healthy，端口 `0.0.0.0:9100 -> 9100/tcp`
 - 电脑入口 <http://localhost:9100>；手机配对地址 `http://192.168.1.3:9100`（`PUBLIC_URL` 决定二维码内容）
 - 运行时参数：`PORT=9100`、`DATA_DIR=/data`、`MAX_SESSIONS=10`、`RECEIVER_GRACE_MS=120000`、`--tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev`、`--tmpfs /tmp:size=16m,mode=1777,...`、`-m 768m`
 - 无 portproxy、无新增防火墙规则；仅可信局域网使用，不可暴露公网
@@ -56,18 +56,15 @@ Invoke-RestMethod http://localhost:9100/health
 ## 测试
 
 ```bash
-npm test        # node --test，44/44 通过（约 1 秒）
-node deploy-smoke.mjs http://localhost:9100   # 需先替换脚本内的 publicUrl 断言
+npm test                                         # node --test，45/45 全部通过（约 0.8 秒）
+node deploy-smoke.mjs http://localhost:9100       # 端到端双向冒烟通过
 ```
 
 注意：在本目录用 `node --test test/` 会因参数解析失败，请用 `npm test`。
 
-## 已知遗留（可做但不紧急）
+## 已知遗留与优化建议
 
-- 页面品牌仍是「LAN Drop」，`sessionStorage` 键仍是 `lan-drop-receiver`，未随项目改名统一（已在 `DEPLOYED-WSLC.md` 注明）
-- `package.json` 版本仍是 `1.0.0`，而镜像 tag 为 `1.0.1`，未对齐
-- `deploy-smoke.mjs` 把 `publicUrl` 硬编码为 `http://192.168.1.3:9100`，换网络后需同步
-- 本地仍保留 `lan-drop-wslc-image.tar` 旧镜像归档（已 gitignore），可删
+- 本地仍保留 `lan-drop-wslc-image.tar` 旧镜像归档（已 gitignore），可按需删除以释放磁盘
 - `compose.wsl.yaml` 为本机私有覆盖文件，未入库
 - LICENSE 版权署名是占位「2026 Phone PC Transfer contributors」
 
@@ -81,6 +78,6 @@ node deploy-smoke.mjs http://localhost:9100   # 需先替换脚本内的 publicU
 ## 接手第一步建议
 
 1. `wslc list` + `Invoke-RestMethod http://localhost:9100/health` 确认服务在跑
-2. `npm test` 确认 44/44
+2. `npm test` 确认 45/45
 3. 读 `DEPLOYED-WSLC.md` 与 `TESTING.md` 了解当前事实与历史结论
 4. 若要改代码：先改 `server.js` + `test/server.test.js`，再动 `public/`，最后按 `DEPLOYED-WSLC.md` 重建镜像并冒烟

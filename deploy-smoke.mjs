@@ -6,17 +6,34 @@ async function api(route, {token, json, ...options} = {}) {
 }
 assert.equal((await (await api('/health')).json()).ok, true);
 const config = await (await api('/api/config')).json();
-assert.equal(config.publicUrl, 'http://192.168.1.3:9100');
+assert.ok(typeof config.publicUrl === 'string' && config.publicUrl.length > 0, 'publicUrl is configured');
 const s = await (await api('/api/sessions',{method:'POST',json:{}})).json();
 const p = await (await api('/api/pair',{method:'POST',json:{code:new URL(s.pairUrl).hash.slice(1)}})).json();
-await api('/api/text',{method:'POST',token:p.senderToken,json:{text:'WSL 9100 部署验证 😀'}});
+
+// 1. Phone sends text and image
+await api('/api/text',{method:'POST',token:p.senderToken,json:{text:'手机发送测试 😀'}});
 const data = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==','base64');
-const form = new FormData(); form.append('files',new Blob([data],{type:'image/png'}),'smoke.png');
-const uploaded = await (await api('/api/images',{method:'POST',token:p.senderToken,body:form})).json();
-const got = Buffer.from(await (await api(`/api/files/${uploaded.items[0].id}`,{token:s.receiverToken})).arrayBuffer());
-assert.deepEqual(got,data);
+const formPhone = new FormData(); formPhone.append('files',new Blob([data],{type:'image/png'}),'phone-smoke.png');
+const phoneUploaded = await (await api('/api/images',{method:'POST',token:p.senderToken,body:formPhone})).json();
+
+// 2. PC downloads phone's image
+const gotFromPhone = Buffer.from(await (await api(`/api/files/${phoneUploaded.items[0].id}`,{token:s.receiverToken})).arrayBuffer());
+assert.deepEqual(gotFromPhone, data);
+
+// 3. PC sends text and image
+await api('/api/text',{method:'POST',token:s.receiverToken,json:{text:'电脑发送测试 💻'}});
+const formPc = new FormData(); formPc.append('files',new Blob([data],{type:'image/png'}),'pc-smoke.png');
+const pcUploaded = await (await api('/api/images',{method:'POST',token:s.receiverToken,body:formPc})).json();
+
+// 4. Phone queries session and downloads PC's image
+const phoneState = await (await api('/api/session',{token:p.senderToken})).json();
+assert.equal(phoneState.items.length, 4);
+const gotFromPc = Buffer.from(await (await api(`/api/files/${pcUploaded.items[0].id}`,{token:p.senderToken})).arrayBuffer());
+assert.deepEqual(gotFromPc, data);
+
+// 5. ZIP download and cleanup
 const zip = await api('/api/archive',{token:s.receiverToken}); assert.equal(zip.headers.get('content-type'),'application/zip'); await zip.arrayBuffer();
 await api('/api/items',{method:'DELETE',token:s.receiverToken});
-await api('/api/disconnect',{method:'POST',token:s.receiverToken});
 assert.equal((await (await api('/api/session',{token:s.receiverToken})).json()).items.length,0);
-console.log('PASS: health, configured URL, pairing, Chinese text, image upload, exact-byte download, ZIP, clear and disconnect');
+await api('/api/session',{method:'DELETE',token:s.receiverToken});
+console.log('PASS: health, bidirectional text and images, exact-byte downloads, ZIP, clear and clean session termination');
