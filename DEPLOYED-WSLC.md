@@ -39,6 +39,16 @@ wslc start phone-pc-transfer
 Start-Process 'http://localhost:9100'
 ```
 
+### IP 变动或一键自适应启动
+
+当电脑切换网络或路由器 DHCP 重新分配 IP 时，直接在项目目录双击运行 `start.cmd` 或在 PowerShell 中执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+```
+
+该脚本会自动检测当前活动的 Wi-Fi 局域网 IPv4 地址，并以最新的 `PUBLIC_URL` 重启容器，无需手动排查与修改 IP。
+
 本次未设置登录自动启动或故障自动重启。当前 WSLC run 帮助没有 Docker 的 --restart 选项，不承诺 unless-stopped 等价行为。用户已明确需要时手动启动，不配置任务计划程序或周期自动拉起；异常时手动查看状态与日志。
 
 ## 重建容器
