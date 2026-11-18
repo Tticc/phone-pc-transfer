@@ -26,17 +26,17 @@
 
 ## 运行中的部署（WSLC）
 
-- 容器 `phone-pc-transfer`，镜像 `phone-pc-transfer:1.1.0`，状态 healthy，端口 `0.0.0.0:9100 -> 9100/tcp`
-- 电脑入口 <http://localhost:9100>；手机配对地址 `http://192.168.1.3:9100`（`PUBLIC_URL` 决定二维码内容）
+- 容器 `ptc`，镜像 `ptc:1.1.0`（含 `ptc:latest`），状态 healthy，端口 `0.0.0.0:9100 -> 9100/tcp`
+- 电脑入口 <http://localhost:9100>；手机配对地址 `http://192.168.1.2:9100`（`PUBLIC_URL` 决定二维码内容；若 IP 变化可运行 `start.cmd` 自动检测）
 - 运行时参数：`PORT=9100`、`DATA_DIR=/data`、`MAX_SESSIONS=10`、`RECEIVER_GRACE_MS=120000`、`--tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev`、`--tmpfs /tmp:size=16m,mode=1777,...`、`-m 768m`
 - 无 portproxy、无新增防火墙规则；仅可信局域网使用，不可暴露公网
 - WSLC 3.0.3.0 没有 `read_only`、`cap_drop`、`no-new-privileges`、`pids_limit`、日志轮转、`restart` 的等价选项，这些**未**从 Compose 等价迁移
 
 ```powershell
 wslc list
-wslc logs phone-pc-transfer
-wslc start phone-pc-transfer   # 仅在停止时
-wslc stop phone-pc-transfer
+wslc logs ptc
+wslc start ptc   # 仅在停止时
+wslc stop ptc
 Invoke-RestMethod http://localhost:9100/health
 ```
 

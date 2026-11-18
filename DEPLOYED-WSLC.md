@@ -4,14 +4,14 @@
 
 ## 命名调整
 
-项目目录、当前容器及建议 GitHub 仓库名均为 `phone-pc-transfer`；镜像已迭代为 `phone-pc-transfer:1.1.0`（支持电脑/手机双向互传）。已删除 WSLC 旧 `lan-drop` 容器及旧标签，并按新名称重新部署。启动命令为 `wslc start phone-pc-transfer`。重建已清空临时内容，需重新配对。页面品牌已统一为 Phone PC Transfer，存储键平滑兼容旧会话。
+项目目录及 GitHub 仓库名为 `phone-pc-transfer`；为了方便终端日常启停，WSLC 容器名已简化为 **`ptc`**，镜像已统一为 **`ptc:1.1.0`**（含 `ptc:latest` 标签，支持电脑/手机双向互传）。启动命令为 `wslc start ptc`。重建已清空临时内容，需重新配对。页面品牌已统一为 Phone PC Transfer，存储键平滑兼容旧会话。
 
 ## 当前状态
 
-- 容器名：`phone-pc-transfer`；当前镜像：`phone-pc-transfer:1.1.0`（电脑 ⇄ 手机双向互传版）。
+- 容器名：`ptc`；当前镜像：`ptc:1.1.0`（电脑 ⇄ 手机双向互传版）。
 - 发布端口：`0.0.0.0:9100 -> 9100/tcp`，Windows 监听进程由 WSLC 管理。
 - 电脑入口：<http://localhost:9100>。
-- 手机配对地址：`http://192.168.1.3:9100`。
+- 手机配对地址：`http://192.168.1.2:9100`（若 IP 变动可运行 `start.cmd` 自动刷新）。
 - 未新增 portproxy，实际检查转发列表为空；无需绑定 Ubuntu IP。
 - 支持功能：手机与电脑双向发送文字（支持链接识别与快捷键）、图片上传与预览、单文件与批量 ZIP 下载、显式结束会话。
 - 会话生命周期与配额：单会话上限 10、空会话 120 秒失联宽限、内存 tmpfs 512 MiB、容器内存 768 MiB。
@@ -32,9 +32,9 @@ Windows 局域网 IP 变化后仍需更新 PUBLIC_URL 并重建容器、生成�
 
 ```powershell
 wslc list
-wslc logs phone-pc-transfer
-wslc stop phone-pc-transfer
-wslc start phone-pc-transfer
+wslc logs ptc
+wslc stop ptc
+wslc start ptc
 # 启动后打开接收页
 Start-Process 'http://localhost:9100'
 ```
@@ -47,7 +47,7 @@ Start-Process 'http://localhost:9100'
 powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-该脚本会自动检测当前活动的 Wi-Fi 局域网 IPv4 地址，并以最新的 `PUBLIC_URL` 重启容器，无需手动排查与修改 IP。
+该脚本会自动检测当前活动的 Wi-Fi 局域网 IPv4 地址，并以最新的 `PUBLIC_URL` 重启 `ptc` 容器，无需手动排查与修改 IP。
 
 本次未设置登录自动启动或故障自动重启。当前 WSLC run 帮助没有 Docker 的 --restart 选项，不承诺 unless-stopped 等价行为。用户已明确需要时手动启动，不配置任务计划程序或周期自动拉起；异常时手动查看状态与日志。
 
@@ -56,9 +56,9 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 以下操作会清空临时内容。PowerShell 不会像某些 Bash 环境那样改写 Linux 路径参数。
 
 ```powershell
-wslc stop phone-pc-transfer
-wslc rm phone-pc-transfer
-wslc run -d --name phone-pc-transfer -p 0.0.0.0:9100:9100 -e PORT=9100 -e PUBLIC_URL=http://192.168.1.3:9100 -e DATA_DIR=/data -e MAX_SESSIONS=10 -e RECEIVER_GRACE_MS=120000 --tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev --tmpfs /tmp:size=16m,mode=1777,noexec,nosuid,nodev -m 768m phone-pc-transfer:1.1.0
+wslc stop ptc
+wslc rm ptc
+wslc run -d --name ptc -p 0.0.0.0:9100:9100 -e PORT=9100 -e PUBLIC_URL=http://192.168.1.2:9100 -e DATA_DIR=/data -e MAX_SESSIONS=10 -e RECEIVER_GRACE_MS=120000 --tmpfs /data:size=512m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev --tmpfs /tmp:size=16m,mode=1777,noexec,nosuid,nodev -m 768m ptc:1.1.0
 ```
 
 ## 与原 Docker 部署的差异
